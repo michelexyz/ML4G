@@ -4,3 +4,9 @@
 
 # Python byte code
 *.pyc
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
