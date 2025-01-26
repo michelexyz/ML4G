@@ -2,7 +2,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-from itertools import combinations
+from itertools import product
+
+from itertools import combinations as combi_sub
+
+import numpy as np
 
 ###############################################################################
 # 1) A Tiny RNN Model for Multi-Dimensional Inputs
@@ -86,7 +90,7 @@ def create_data_loaders_multivar(X_series, Y_series, seq_len=5,
 ###############################################################################
 # 3) Train and Get R² (Single Direction)
 ###############################################################################
-def train_and_get_r2(train_loader, val_loader, input_size=1, hidden_size=8,
+def train_and_val_r2(train_mean, train_loader, val_loader, input_size=1, hidden_size=8,
                      epochs=10, lr=1e-3):
     """
     Trains a SmallRNN to predict a 1D target from multi-dim inputs, returning R² on validation set.
@@ -119,16 +123,20 @@ def train_and_get_r2(train_loader, val_loader, input_size=1, hidden_size=8,
     all_true  = np.concatenate(all_true)
 
     # R^2 = 1 - SSR/SST
-    sst = np.sum((all_true - np.mean(all_true))**2)
+    sst = np.sum((all_true - train_mean)**2)
     ssr = np.sum((all_preds - all_true)**2)
     r2  = 1 - ssr/sst if sst > 1e-12 else 0.0
+
+    if ssr > sst:
+        print("Warning: SSR > SST. Model is worse than mean prediction.")
+        return 0.0
     return r2
 
 ###############################################################################
 # 4) Partial Correlation Surrogate (One-Directional R²)
 ###############################################################################
-def partial_corr_r2_single_direction(X_data, Y_data, Z_data=None,
-                                     seq_len=5, batch_size=16, alpha=0.05):
+def partial_corr_r2(X_data, Y_data, Z_data=None,
+                                     seq_len=5, batch_size=16, verbose=True):
     """
     X_data: shape (T,) or (T, pX) - target we want to predict
     Y_data: shape (T,) or (T, pY) - predictor
@@ -139,12 +147,12 @@ def partial_corr_r2_single_direction(X_data, Y_data, Z_data=None,
     Returns: r_xy_given_z (float)
     """
 
-    # 1. Compute r2_xy = R^2( X <- Y )
-    r2_xy = compute_r2_pair(X_data, Y_data, seq_len=seq_len, batch_size=batch_size)
+    # 1. Compute r2_xy = R^2( Y <- X )
+    r2_yx = compute_r2_pair(Y_data, X_data, seq_len=seq_len, batch_size=batch_size)
 
     # If no Z provided, interpret this as zero conditioning
     if Z_data is None:
-        return r2_xy  # might just return the unconditional measure
+        return r2_yx  # might just return the unconditional measure
 
     # 2. Compute r2_xz = R^2( X <- Z )
     r2_xz = compute_r2_pair(X_data, Z_data, seq_len=seq_len, batch_size=batch_size)
@@ -157,7 +165,11 @@ def partial_corr_r2_single_direction(X_data, Y_data, Z_data=None,
     if denom < 1e-12:
         r_xy_given_z = 0.0
     else:
-        r_xy_given_z = (r2_xy - r2_xz*r2_yz)/denom
+        r_xy_given_z = (r2_yx - r2_xz*r2_yz)/denom
+
+    if verbose:
+        print(f"R²(X <- Z) = {r2_xz:.3f}, R²(Y <- Z) = {r2_yz:.3f}")
+        print(f"Partial R²(X <- Y | Z) = {r_xy_given_z:.3f}")
 
     return r_xy_given_z
 
@@ -169,6 +181,8 @@ def compute_r2_pair(target_series, predictor_series, seq_len=5, batch_size=16,
     """
     target_series: shape (T,) or (T, 1)
     predictor_series: shape (T, p) for p predictor features
+
+    Returns R²(X <- Y) for the predictor -> target mapping.
     """
     # Build data loaders for (predictor -> target) mapping
     train_loader, val_loader = create_data_loaders_multivar(
@@ -178,7 +192,11 @@ def compute_r2_pair(target_series, predictor_series, seq_len=5, batch_size=16,
 
     # Train, get R²
     p = predictor_series.shape[1] if len(predictor_series.shape) > 1 else 1
-    r2_score = train_and_get_r2(train_loader, val_loader,
+
+    train_mean = np.mean(target_series)
+
+    assert len(target_series.shape) == 1, "Target should be 1D"
+    r2_score = train_and_val_r2(train_mean, train_loader, val_loader,
                                 input_size=p,
                                 hidden_size=hidden_size,
                                 epochs=epochs, lr=lr)
@@ -187,7 +205,7 @@ def compute_r2_pair(target_series, predictor_series, seq_len=5, batch_size=16,
 ###############################################################################
 # 5) A Simplified PC Algorithm Sketch
 ###############################################################################
-def NN_PCMCI(data, alpha=0.05, seq_len=5, max_cond_set_size=1):
+def NN_PCMCI(data, alpha=0.05, seq_len=5, max_cond_set_size=2, verbose=True):
     """
     data: np.array of shape (T, N)
     alpha: threshold for partial correlation
@@ -197,48 +215,28 @@ def NN_PCMCI(data, alpha=0.05, seq_len=5, max_cond_set_size=1):
     Additionally, you could store directional info by comparing R^2(X<-Y) vs R^2(Y<-X).
     """
     N = data.shape[1]
-    variables = list(range(N))
+    variables = range(N)
     # Start with a fully-connected graph
-    adj_matrix = np.ones((N, N), dtype=int) - np.eye(N, dtype=int)
+    adj_matrix = np.ones((N, N), dtype=int)
 
-    for cond_size in range(max_cond_set_size+1):
-        edges_to_remove = []
-        for (i, j) in combinations(variables, 2):
+    for cond_size in range(1, max_cond_set_size+1):
+        
+        for (i, j) in product(variables, repeat=2):
+            if verbose:
+                print(f"Checking edge {i} -> {j} with cond_size={cond_size}")
             if adj_matrix[i, j] == 0:
                 continue
 
             # Gather possible conditioning subsets of the neighbors
-            neighbors_i = np.where(adj_matrix[i] == 1)[0].tolist()
+            neighbors_i = np.where(adj_matrix[i] == 1)[0].tolist() #TODO CHECK CORRECTNESS
             if j in neighbors_i:
                 neighbors_i.remove(j)  # exclude j from i's neighbors
 
-            from itertools import combinations as combi_sub
-            all_cond_subsets = list(combi_sub(neighbors_i, cond_size))
-
-            remove_edge = False
-            for cond_subset in all_cond_subsets:
-                if len(cond_subset) == 0:
-                    # unconditioned partial correlation => r_xy
-                    # single direction: r2_xy
-                    X_data = data[:, i]
-                    Y_data = data[:, j]
-                    r_xy = compute_r2_pair(X_data, Y_data, seq_len=seq_len)
-                    if r_xy < alpha:
-                        remove_edge = True
-                        break
-                else:
-                    # condition on Z
-                    Z_data = data[:, cond_subset]  # shape (T, cond_size)
-                    # partial corr in one direction
-                    X_data = data[:, i]
-                    Y_data = data[:, j]
-                    r_xy_given_z = partial_corr_r2_single_direction(
-                        X_data, Y_data, Z_data,
-                        seq_len=seq_len, alpha=alpha
-                    )
-                    if abs(r_xy_given_z) < alpha:
-                        remove_edge = True
-                        break
+            remove_edge = check_cond_subsets(
+                neighbors_i, cond_size, data, i, j,
+                alpha=alpha, seq_len=seq_len, verbose=verbose
+            )
+            
 
             if remove_edge:
                 adj_matrix[i, j] = 0
@@ -250,7 +248,42 @@ def NN_PCMCI(data, alpha=0.05, seq_len=5, max_cond_set_size=1):
 
     return adj_matrix
 
-import numpy as np
+def check_cond_subsets(neighbors, cond_size, data, i, j, alpha=0.05, seq_len=5, verbose=True):
+                       
+    all_cond_subsets = list(combi_sub(neighbors, cond_size))
+    
+    remove_edge = False
+    for cond_subset in all_cond_subsets:
+
+        if verbose:
+            print(f"Checking subset {cond_subset}")
+        
+        if len(cond_subset) == 0:
+            # unconditioned partial correlation => r_xy
+            # single direction: r2_xy
+            X_data = data[:, i]
+            Y_data = data[:, j]
+            r_xy = compute_r2_pair(Y_data, X_data, seq_len=seq_len)
+            if verbose:
+                print(f"R²(Y <- X) = {r_xy:.3f}")
+            if r_xy < alpha:
+                remove_edge = True
+                break
+        else:
+            # condition on Z
+            Z_data = data[:, cond_subset]  # shape (T, cond_size)
+            # partial corr in one direction
+            X_data = data[:, i]
+            Y_data = data[:, j]
+            r_xy_given_z = partial_corr_r2(
+                X_data, Y_data, Z_data,
+                seq_len=seq_len, verbose=verbose
+            )
+            if abs(r_xy_given_z) < alpha:
+                remove_edge = True
+                break
+
+    return remove_edge
 
 def generate_synthetic_data(T=200):
     """
@@ -316,9 +349,10 @@ if __name__ == "__main__":
     # 2) Run your single-direction PC-like algorithm
     adjacency = NN_PCMCI(
         data,           # shape (T, N=3)
-        alpha=100,     # threshold or significance
+        alpha=0.001,     # threshold or significance
         seq_len=5,      # how many time steps for RNN
-        max_cond_set_size=1
+        max_cond_set_size=1,
+        verbose=True
     )
 
     print("Learned adjacency matrix:")
