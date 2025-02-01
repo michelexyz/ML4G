@@ -48,6 +48,7 @@ class PCMCI_RNN:
 
         # For demonstration, we fix a train/val split here
         self.split_idx = int(split_percentage * self.num_timesteps)
+        self.split_percentage = split_percentage
 
        
         self.candidate_parents = {
@@ -121,12 +122,12 @@ class PCMCI_RNN:
                         )
                         # (2) Test link x->Y_res on train/val => R^2
                         r2_val = self._test_link_on_split(
-                            x, Y_res, epochs=epochs, batch_size=batch_size
+                            candidate_var=x, target_ovveride=Y_res, epochs=epochs, batch_size=batch_size
                         )
                     else: 
                         # No conditioning, just test X->Y
                         r2_val = self._test_link_on_split(
-                            x, target_var=y, epochs=epochs, batch_size=batch_size
+                            candidate_var=x, target_var=y, epochs=epochs, batch_size=batch_size
                         )
                     self.r2_scores[(y, x)] = r2_val  # store for next iteration
 
@@ -149,58 +150,50 @@ class PCMCI_RNN:
 
     def mci_step(self, epochs: int = 20, batch_size: int = 32) -> Dict[Tuple[int, int], float]:
         """
-        
+        For each (Y, X) link among discovered parents:
+          1) Build (parents_of_Y)->Y => residual (if parents exist)
+          2) Build (parents_of_X)->X => residual
+          3) Test X_res->Y_res on train/val => R^2
         """
         final_r2 = {}
         for y in range(self.num_vars):
-            parents_of_y = list(self.candidate_parents[y])  # includes Y if not removed
-            # remove x from parents_of_y
-
-            if x in parents_of_y:
-                
-                parents_of_y.remove(x)
-                
-
-        
-            if parents_of_y > 0:
-                # Build (parents_of_y)->Y => residual
-                # remove x from parents_of_y if present
-
-                
-                Y_res = self._condition_through_residuals(
-                    y, parents_of_y, epochs=epochs, batch_size=batch_size
-                )
+            parents_of_y = list(self.candidate_parents[y])     
                 
             for x in range(self.num_vars):
+                parents_of_y_without_x = parents_of_y.copy()
+                if x in parents_of_y:
+                    parents_of_y_without_x.remove(x)    
+                
+                Y_res = None
+                if len(parents_of_y_without_x) > 0:
+                    # Build (parents_of_y)->Y => residual
+                    # remove x from parents_of_y if present
+                    
+                    Y_res = self._condition_through_residuals(
+                        y, parents_of_y_without_x, epochs=epochs, batch_size=batch_size
+                    )
 
                 parents_of_x = list(self.candidate_parents[x])
 
-                if x in parents_of_y:
-                    # Skip Y itself
-                    continue
-                # TODO
-               
-
-
-
-
-
-
-            parents_of_y = list(self.candidate_parents[y])  # includes Y if not removed
-
-            if len(parents_of_y)> 0:
-
-                # Build (parents_of_y)->Y => residual
-                Y_res = self._condition_through_residuals(
-                    y, parents_of_y, epochs=epochs, batch_size=batch_size
-                )
-            # Now for each x in parents_of_y, test x->Y_res
-            for x in parents_of_y:
+                
+                X_res = None
+                if len(parents_of_x) > 0:
+                    # Build (parents_of_x)->X => residual
+                    X_res = self._condition_through_residuals(
+                        x, parents_of_x, epochs=epochs, batch_size=batch_size
+                    )
+                    # Now test X_res->Y_res
                 r2_val = self._test_link_on_split(
-                    x, Y_res, epochs=epochs, batch_size=batch_size
+                    candidate_var=x,
+                    candidate_ovveride=X_res,
+                    target_ovveride=Y_res,
+                    target_var=y,
+                    epochs=epochs,
+                    batch_size=batch_size
                 )
                 final_r2[(y, x)] = r2_val
         return final_r2
+                
 
     # --------------------------------------------------------------------------
     # UTILS
@@ -223,13 +216,17 @@ class PCMCI_RNN:
         if len(cond_set) < 1:
             raise ValueError("Conditioning set must have at least one variable")
         # Build dataset for full range
-        X_full, Y_full = self.manager.create_rnn_dataset(
+        # X_full, Y_full = self.manager.create_rnn_dataset(
+        #     target_var_idx=target_var,
+        #     predictor_vars=cond_set,
+        #     start_idx=0,
+        #     end_idx=self.num_timesteps
+        # )
+        X_full, Y_full,_,_ = self.manager.create_rnn_dataset_split(
             target_var_idx=target_var,
             predictor_vars=cond_set,
-            start_idx=0,
-            end_idx=self.num_timesteps
+            train_split=1.0,
         )
-
         model = SimpleRNN(
             input_dim=len(cond_set), 
             hidden_dim=self.hidden_dim,
@@ -255,8 +252,9 @@ class PCMCI_RNN:
 
     def _test_link_on_split(
         self,
-        candidate_var: int,
-        conditioned_series: np.ndarray = None,
+        candidate_var: int = None,
+        candidate_ovveride: np.ndarray = None,
+        target_ovveride: np.ndarray = None,
         target_var: int = None,
         epochs: int = 20,
         batch_size: int = 32,
@@ -267,27 +265,38 @@ class PCMCI_RNN:
         Splits data into [0 : split_idx] for training, [split_idx : end] for validation.
         Returns R^2 on validation.
         """
-        if target_var is None and conditioned_series is None:
+        if target_var is None and target_ovveride is None:
             raise ValueError("Must provide conditioned_series or target_var")
-        if target_var is None:
-            target_var = 0
+        if candidate_var is None and candidate_ovveride is None:
+            raise ValueError("Must provide candidate_var or candidate_ovveride")
             
-        # Build training set
-        X_train, Y_train = self.manager.create_rnn_dataset(
-            target_var_idx=target_var,  # We'll store the residual in 'target_series' as if it's a single "variable"
-            predictor_vars=[candidate_var],
-            start_idx=0,
-            end_idx=self.split_idx,
-            override_target=conditioned_series
+        # # Build training set
+        # X_train, Y_train = self.manager.create_rnn_dataset(
+        #     target_var_idx=target_var,  # We'll store the residual in 'target_series' as if it's a single "variable"
+        #     predictor_vars=[candidate_var],
+        #     start_idx=0,
+        #     end_idx=self.split_idx,
+        #     override_predictors=candidate_ovveride,
+        #     override_target=target_ovveride
+        # )
+        # # Build validation set
+        # X_val, Y_val = self.manager.create_rnn_dataset(
+        #     target_var_idx=target_var,
+        #     predictor_vars=[candidate_var],
+        #     start_idx=self.split_idx,
+        #     end_idx=self.num_timesteps,
+        #     override_predictors=candidate_ovveride,
+        #     override_target=target_ovveride
+        # )
+
+        X_train, Y_train,X_val,Y_val = self.manager.create_rnn_dataset_split(
+            target_var_idx=target_var,
+            predictor_vars=candidate_var,
+            train_split=self.split_percentage,
+            override_predictors=candidate_ovveride,
+            override_target=target_ovveride
         )
-        # Build validation set
-        X_val, Y_val = self.manager.create_rnn_dataset(
-            target_var_idx=0,
-            predictor_vars=[candidate_var],
-            start_idx=self.split_idx,
-            end_idx=self.num_timesteps,
-            override_target=conditioned_series
-        )
+
 
         if X_train.shape[0] < 1 or X_val.shape[0] < 1:
             return 0.0  # Not enough data, return minimal R^2
