@@ -9,7 +9,7 @@ class TestRNNDataHandler(unittest.TestCase):
     def setUp(self):
         # Create a dummy dataset with 20 timesteps and 2 features.
         self.num_timesteps = 20
-        self.num_features = 2
+        self.num_features = 10
         # Example data: numbers from 0 to (20*2 - 1) reshaped into (20, 2)
         self.data = np.arange(self.num_timesteps * self.num_features).reshape(self.num_timesteps, self.num_features)
         self.lookback = 5
@@ -111,6 +111,46 @@ class TestRNNDataHandler(unittest.TestCase):
                 train_split=0.5,
                 override_predictors=None
             )
+    def test_methods_equivalence(self):
+
+        target_var_idx = 0
+        # predictor_vars won't be used because we override predictors.
+        predictor_vars = [4,2]  
+        train_split = 0.5
+
+        X_train, Y_train, X_val, Y_val = self.handler.create_rnn_dataset_split(
+            target_var_idx=target_var_idx,
+            predictor_vars=predictor_vars,
+            train_split=train_split
+        )
+
+        X_train_old, Y_train_old = self.handler.create_rnn_dataset(
+            target_var_idx=target_var_idx,
+            predictor_vars=predictor_vars,
+            start_idx=0,
+            end_idx= int(self.num_timesteps*train_split)
+
+        )
+
+        X_val_old, Y_val_old = self.handler.create_rnn_dataset(
+            target_var_idx=target_var_idx,
+            predictor_vars=predictor_vars,
+            start_idx=int(self.num_timesteps*train_split)
+
+        )
+
+        self.assertEqual(X_train.shape, X_train_old.shape, f"X_train shape {X_train.shape} is different from {X_train_old.shape}")
+        self.assertEqual(Y_train.shape, Y_train_old.shape, f"Y_train shape {Y_train.shape} is different from {Y_train_old.shape}")
+        self.assertEqual(X_val.shape, X_val_old.shape, f"X_val shape {X_val.shape} is different from {X_val_old.shape}")
+        self.assertEqual(Y_val.shape, Y_val_old.shape, f"Y_train shape {Y_val.shape} is different from {Y_val_old.shape}")
+        
+
+
+
+
+
+
+
 
 
 if __name__ == '__main__':

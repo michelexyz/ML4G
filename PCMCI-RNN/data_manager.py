@@ -109,9 +109,15 @@ class TimeSeriesDataManager:
             predictors = torch.tensor(self.data[:, predictor_vars], dtype=torch.float32, device=self.device)
         # predictors shape: (num_timesteps, num_features)
 
+        if predictors.dim() == 1:
+            predictors = predictors.unsqueeze(1)
         # Use torch.unfold to extract sliding windows along the time dimension.
-        # This creates a tensor of shape: (num_timesteps - lookback + 1, lookback, num_features)
+        # This creates a tensor of shape: (num_timesteps - lookback + 1, num_features, lookback)
         X_full = predictors.unfold(dimension=0, size=self.lookback, step=1)
+        print("Shape of X: ")
+        print (X_full.shape)
+        X_full = X_full.permute(0, 2, 1)# This creates a tensor of shape: (num_timesteps - lookback + 1, lookback, num_features)
+
         # We need exactly (num_timesteps - lookback) windows so that each window has a corresponding target.
         total_windows = self.num_timesteps - self.lookback
         X_full = X_full[:total_windows]
