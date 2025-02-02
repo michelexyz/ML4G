@@ -6,8 +6,8 @@ from torch.utils.data import TensorDataset, DataLoader
 from typing import List, Dict, Tuple, Set
 
 
-from data_manager import TimeSeriesDataManager
-from models import SimpleRNN, train_model, compute_r2
+from .data_manager import TimeSeriesDataManager
+from .models import SimpleRNN, train_model, compute_r2
 
 class PCMCI_RNN:
     """
