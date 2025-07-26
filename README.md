@@ -1,9 +1,9 @@
 # introduction
 This repository forks the causal discovery Tigramite framework and reproduces the study performed by [Grunge et al.](https://doi.org/10.1063/5.0020538), which focuses on stationary causal
-regimes. This research is then extended introducing a new algorithm for causal discovery, MCI-RNN, that uses temporal networks to represent the non-linear causal links between time-dependent observational variables.
+regimes. The research is then extended introducing a new algorithm for causal discovery, MCI-RNN, that uses temporal networks to represent the non-linear causal links between time-dependent observational variables.
 
 # Additions to the Tigramite framework
-The folder [PCMCI_RNN](https://github.com/michelexyz/ML4G/tree/master/PCMCI_RNN) contains the main logic for the new algorithm for causal discovery, MCI-RNN, that uses temporal networks to represent the non-linear causal links between time-dependent observational variables.
+The folder [PCMCI_RNN](https://github.com/michelexyz/ML4G/tree/master/PCMCI_RNN) contains the main logic for MCI-RNN.
 
 It also contains the code to reproduce the linear correllation studies within regime-dependent data presented by [Grunge et al.](https://doi.org/10.1063/5.0020538), and the code to reproduce a similar synthetic dataset given the parameters reported in their paper.
 
