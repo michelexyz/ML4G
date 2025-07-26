@@ -17,7 +17,7 @@ The one performed on real data, to infer the known corellation between AIR(All I
 ## Novel experiments
 Finally, the experiments using MCI-RNN were performed [here](https://github.com/michelexyz/ML4G/blob/master/experiments_with_PCMCI_RNN.ipynb) for synthetic data and in the same notebook as above for the real data.
 
-⚠ Warning! Some of the reported experiments results reported may be missing from the notebooks, but can they can easily be reproduced in the latter.
+⚠ Warning! Some of the experiments results reported may be missing from the notebooks, but can they can easily be reproduced in the latter.
 
 
 # Tigramite – Causal inference for time series datasets
