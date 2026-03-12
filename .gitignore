@@ -10,3 +10,9 @@ build/
 dist/
 *.egg-info/
 .eggs/
+
+# Virtual environments
+venv/
+env/
+.env/
+.DS_Store
